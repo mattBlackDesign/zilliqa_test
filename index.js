@@ -3,18 +3,18 @@ const { BN, Long, bytes, units } = require('@zilliqa-js/util');
 const { Zilliqa } = require('@zilliqa-js/zilliqa');
 const CP = require ('@zilliqa-js/crypto');
 
-const zilliqa = new Zilliqa('http://localhost:4200');
+const zilliqa = new Zilliqa('https://dev-api.zilliqa.com');
 
 // These are set by the core protocol, and may vary per-chain.
 // These numbers are JUST AN EXAMPLE. They will NOT WORK on the public testnet
 // or mainnet. Please check what they are before proceeding, or your
 // transactions will simply be rejected.
-const CHAIN_ID = 1;
+const CHAIN_ID = 333;
 const MSG_VERSION = 1;
 const VERSION = bytes.pack(CHAIN_ID, MSG_VERSION);
 
 // Populate the wallet with an account
-const privkey = 'f9b54b16665493d91d09d00262d25a8f107a747ed022927e4864de67e15bc8b6';
+const privkey = '95c68a61493b0e1c68963716ce40dce918bb6a9a8582e51d33fe302169038076';
 
 zilliqa.wallet.addByPrivateKey(
   privkey
@@ -36,7 +36,7 @@ async function testBlockchain() {
     console.log(`Your account balance is:`);
     console.log(balance.result)
     console.log(`Current Minimum Gas Price: ${minGasPrice.result}`);
-    const myGasPrice = units.toQa('1', units.Units.Li); // Gas Price that will be used by all transactions
+    const myGasPrice = units.toQa('1000', units.Units.Li); // Gas Price that will be used by all transactions
     console.log(`My Gas Price ${myGasPrice.toString()}`)
     console.log('Sufficient Gas Price?');
     console.log(myGasPrice.gte(new BN(minGasPrice.result))); // Checks if your gas price is less than the minimum gas price
