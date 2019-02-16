@@ -14,7 +14,7 @@ const MSG_VERSION = 1;
 const VERSION = bytes.pack(CHAIN_ID, MSG_VERSION);
 
 // Populate the wallet with an account
-const privkey = '95c68a61493b0e1c68963716ce40dce918bb6a9a8582e51d33fe302169038076';
+const privkey = '869a01d55b9e417eea90e32b5d166d2bed7ba289fe2c8ea71357db6db5001f97';
 
 zilliqa.wallet.addByPrivateKey(
   privkey
@@ -56,55 +56,88 @@ async function testBlockchain() {
     console.log(tx.receipt);
 
     // Deploy a contract
-    const code = `scilla_version 0
+    const code = `
+scilla_version 0
 
-    (* HelloWorld contract *)
+(***************************************************)
+(*               Associated library                *)
+(***************************************************)
 
-    import ListUtils
+import BoolUtils
 
-    (***************************************************)
-    (*               Associated library                *)
-    (***************************************************)
-    library HelloWorld
+library HTLCLib
 
-    let one_msg =
-      fun (msg : Message) =>
-      let nil_msg = Nil {Message} in
-      Cons {Message} msg nil_msg
+let blk_leq =
+  fun (blk1 : BNum) =>
+  fun (blk2 : BNum) =>
+    let bc1 = builtin blt blk1 blk2 in 
+    let bc2 = builtin eq blk1 blk2 in 
+    orb bc1 bc2
 
-    let not_owner_code = Int32 1
-    let set_hello_code = Int32 2
+let one_msg = 
+  fun (msg : Message) => 
+    let nil_msg = Nil {Message} in
+    Cons {Message} msg nil_msg
 
-    (***************************************************)
-    (*             The contract definition             *)
-    (***************************************************)
-
-    contract HelloWorld
-    (owner: ByStr20)
-
-    field welcome_msg : String = ""
-
-    transition setHello (msg : String)
-      is_owner = builtin eq owner _sender;
-      match is_owner with
-      | False =>
-        msg = {_tag : "Main"; _recipient : _sender; _amount : Uint128 0; code : not_owner_code};
-        msgs = one_msg msg;
-        send msgs
-      | True =>
-        welcome_msg := msg;
-        msg = {_tag : "Main"; _recipient : _sender; _amount : Uint128 0; code : set_hello_code};
-        msgs = one_msg msg;
-        send msgs
-      end
-    end
+let not_claimable_code = Int32 1
+let claimable_code = Int32 2
+let not_refundable_code = Int32 3
+let refunable_code = Int32 4
 
 
-    transition getHello ()
-        r <- welcome_msg;
-        e = {_eventname: "getHello()"; msg: r};
-        event e
-    end`;
+(***************************************************)
+(*             Contract definition                 *)
+(***************************************************)
+
+contract HTLC
+
+(*  Parameters *)
+(refund_address    : ByStr20,
+redeem_address     : ByStr20,
+expiration_blk     : BNum,
+secretHash         : ByStr32)
+
+transition claim (secret : ByStr32)
+  hashed_secret = builtin sha256hash secret;
+  is_correct_secret = builtin eq hashed_secret secretHash;
+  blk <- & BLOCKNUMBER;
+  bal <- _balance;
+  in_time = blk_leq blk expiration_blk;
+  is_claimable = andb is_correct_secret in_time;
+
+  match is_claimable with
+  | False =>
+    e = {_eventname : "notClaimable"; code : not_claimable_code};
+    event e
+  | True =>
+    msg  = {_tag : ""; _recipient : redeem_address; _amount : bal; 
+            code : claimable_code};
+    msgs = one_msg msg;
+    e = {_eventname : "Claimed"; code : claimable_code};
+    event e;
+    send msgs     
+  end
+end
+
+transition expire ()
+  blk <- & BLOCKNUMBER;
+  bal <- _balance;
+  in_time = blk_leq blk expiration_blk;
+  is_expired = negb in_time;
+
+  match is_expired with
+  | False =>
+    e = {_eventname : "notRefundable"; code : not_refundable_code};
+    event e
+  | True =>
+    msg  = {_tag : ""; _recipient : refund_address; _amount : bal; 
+            code : claimable_code};
+    msgs = one_msg msg;
+    e = {_eventname : "Claimed"; code : refundable_code};
+    event e;
+    send msgs     
+  end
+end`;
 
     const init = [
       // this parameter is mandatory for all init arrays
@@ -114,12 +147,27 @@ async function testBlockchain() {
         value: "0"
       },
       {
-        vname: "owner",
+        vname: "refund_address",
         type: "ByStr20",
+        value: "0x0fd1fa24a755051bb06e87cf5a27b389a28d84df"
+      },
+      {
+        vname: "redeem_address",
+        type: "ByStr20",
+        value: "0x43050e59fb74bcd3598c70a96a284fc79a48649e"
+      },
+      {
+        vname: "expiration_blk",
+        type: "BNum",
+        value: "86150"
+      },
+      {
+        vname: "secretHash",
+        type: "ByStr32",
         // NOTE: all byte strings passed to Scilla contracts _must_ be
         // prefixed with 0x. Failure to do so will result in the network
         // rejecting the transaction while consuming gas!
-        value: `0x${address}`
+        value: "192f358b9eb5c51b27dff7a7cc82c8ffe058e2c92fdc2474b88bf5c41a14567f"
       }
     ];
 
@@ -127,7 +175,7 @@ async function testBlockchain() {
     const contract = zilliqa.contracts.new(code, init);
 
     // Deploy the contract
-    const [deployTx, hello] = await contract.deploy({
+    const [deployTx, htlc] = await contract.deploy({
       version: VERSION,
       gasPrice: myGasPrice,
       gasLimit: Long.fromNumber(10000)
@@ -140,14 +188,14 @@ async function testBlockchain() {
 
     // Get the deployed contract address
     console.log("The contract address is:");
-    console.log(hello.address);
-    const callTx = await hello.call(
-      "setHello",
+    console.log(htlc.address);
+    const callTx = await htlc.call(
+      "claim",
       [
         {
-          vname: "msg",
-          type: "String",
-          value: "Hello World"
+          vname: "secret",
+          type: "ByStr32",
+          value: "77c1c548c7e525da21a791116d00954493196e17c10ff53b12d55731867640ef"
         }
       ],
       {
